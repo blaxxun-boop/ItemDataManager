@@ -1,0 +1,6 @@
+bin
+obj
+/packages
+ItemDataManager.sln.DotSettings.user
+.idea
+.vs
