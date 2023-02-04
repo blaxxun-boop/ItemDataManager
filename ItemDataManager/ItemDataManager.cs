@@ -143,7 +143,8 @@ public class ItemInfo : IEnumerable<ItemData>
 		ItemData = itemData;
 
 		string prefix = dataKey("");
-		foreach (string key in ItemData.m_customData.Keys)
+		List<string> keys = ItemData.m_customData.Keys.ToList();
+		foreach (string key in keys)
 		{
 			if (key.StartsWith(prefix))
 			{
@@ -260,7 +261,8 @@ public class ItemInfo : IEnumerable<ItemData>
 	public void LoadAll()
 	{
 		string prefix = dataKey("");
-		foreach (string key in ItemData.m_customData.Keys)
+		List<string> keys = ItemData.m_customData.Keys.ToList();
+		foreach (string key in keys)
 		{
 			if (key.StartsWith(prefix))
 			{
