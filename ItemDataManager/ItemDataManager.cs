@@ -609,17 +609,18 @@ public class ItemInfo : IEnumerable<ItemData>
 		if (currentlyUpgradingItem is not null)
 		{
 			item.m_itemData.m_customData = currentlyUpgradingItem.m_customData;
-			if (ItemExtensions.itemInfo.TryGetValue(item.m_itemData, out ItemInfo info))
+			ItemInfo info = currentlyUpgradingItem.Data();
+			ItemExtensions.itemInfo.Remove(currentlyUpgradingItem);
+			ItemExtensions.itemInfo.Add(item.m_itemData, info);
+
+			item.m_itemData.m_quality = currentlyUpgradingItem.m_quality + 1;
+			item.m_itemData.m_variant = currentlyUpgradingItem.m_variant;
+			info.ItemData = item.m_itemData;
+			info.LoadAll();
+
+			foreach (ItemData itemData in info.data.Values)
 			{
-				info.ItemData = item.m_itemData;
-
-				ItemExtensions.itemInfo.Remove(currentlyUpgradingItem);
-				ItemExtensions.itemInfo.Add(item.m_itemData, info);
-
-				foreach (ItemData itemData in info.data.Values)
-				{
-					itemData.Upgraded();
-				}
+				itemData.Upgraded();
 			}
 			currentlyUpgradingItem = null;
 		}
