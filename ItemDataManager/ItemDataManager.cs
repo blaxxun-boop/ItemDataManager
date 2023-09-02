@@ -93,6 +93,7 @@ public class ItemInfo : IEnumerable<ItemData>
 	private WeakReference<ItemInfo>? selfReference = null;
 
 	internal HashSet<string> isCloned = new();
+	private static ItemDrop.ItemData? awakeningItem = null; 
 
 	internal static void addTypeToInheritorsCache(Type type, string typeKey)
 	{
@@ -163,7 +164,7 @@ public class ItemInfo : IEnumerable<ItemData>
 	{
 		string compoundKey = classKey(typeof(T), key);
 		string fullKey = dataKey(compoundKey);
-		if (ItemData.m_customData.ContainsKey(fullKey))
+		if (ItemData.m_customData.ContainsKey(fullKey) || (awakeningItem != ItemData && data.ContainsKey(compoundKey)))
 		{
 			return null;
 		}
@@ -196,10 +197,13 @@ public class ItemInfo : IEnumerable<ItemData>
 				return (T?)(object)dataObj;
 			}
 
-			string fullKey = dataKey(compoundKey);
-			if (ItemData.m_customData.ContainsKey(fullKey))
+			if (awakeningItem != ItemData)
 			{
-				return (T?)(object)constructDataObj(compoundKey)!;
+				string fullKey = dataKey(compoundKey);
+				if (ItemData.m_customData.ContainsKey(fullKey))
+				{
+					return (T?)(object)constructDataObj(compoundKey)!;
+				}
 			}
 		}
 
@@ -261,6 +265,11 @@ public class ItemInfo : IEnumerable<ItemData>
 
 	public void LoadAll()
 	{
+		if (awakeningItem == ItemData)
+		{
+			return;
+		}
+		
 		string prefix = dataKey("");
 		List<string> keys = ItemData.m_customData.Keys.ToList();
 		foreach (string key in keys)
@@ -356,6 +365,7 @@ public class ItemInfo : IEnumerable<ItemData>
 
 	private static void RegisterForceLoadedTypesAddItem(ItemDrop.ItemData? __result)
 	{
+		awakeningItem = null;
 		if (__result is not null)
 		{
 			RegisterForceLoadedTypes(__result);
@@ -624,6 +634,7 @@ public class ItemInfo : IEnumerable<ItemData>
 				itemData.Upgraded();
 			}
 			currentlyUpgradingItem = null;
+			awakeningItem = null;
 		}
 		else if (item.m_itemData.m_dropPrefab is { } prefab && item.m_itemData.m_customData.Count == 0)
 		{
@@ -660,6 +671,14 @@ public class ItemInfo : IEnumerable<ItemData>
 		}
 	}
 
+	private static void TrackAwakeningItem(ItemDrop __instance)
+	{
+		if (ZNetView.m_forceDisableInit)
+		{
+			awakeningItem = __instance.m_itemData;
+		}
+	}
+
 	static ItemInfo()
 	{
 		Harmony harmony = new("org.bepinex.helpers.ItemDataManager");
@@ -689,7 +708,7 @@ public class ItemInfo : IEnumerable<ItemData>
 		// Note: Inventory load implicitly handled by ItemData.Clone() handling within AddItem
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(Player), nameof(Player.Load)), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(RegisterForceLoadedTypesOnPlayerLoaded)), Priority.VeryHigh));
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(Inventory), nameof(Inventory.AddItem), new[] { typeof(string), typeof(int), typeof(int), typeof(int), typeof(long), typeof(string), typeof(bool) }), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(RegisterForceLoadedTypesAddItem)), Priority.First));
-		harmony.Patch(AccessTools.DeclaredMethod(typeof(ItemDrop), nameof(ItemDrop.Awake)), transpiler: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(ImportCustomDataOnUpgrade)), Priority.First), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(ItemDropAwake)), Priority.First));
+		harmony.Patch(AccessTools.DeclaredMethod(typeof(ItemDrop), nameof(ItemDrop.Awake)), prefix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(TrackAwakeningItem))), transpiler: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(ImportCustomDataOnUpgrade)), Priority.First), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(ItemDropAwake)), Priority.First));
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(ItemDrop), nameof(ItemDrop.Awake)), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(ItemDropAwakeDelayed)), Priority.First - 1));
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(ItemDrop.ItemData), nameof(ItemDrop.ItemData.Clone)), prefix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(ItemDataClonePrefix))), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(ItemDataClonePostfix)), Priority.HigherThanNormal));
 		harmony.Patch(AccessTools.DeclaredMethod(typeof(ItemDrop.ItemData), nameof(ItemDrop.ItemData.Clone)), postfix: new HarmonyMethod(AccessTools.DeclaredMethod(typeof(ItemInfo), nameof(ItemDataClonePostfixDelayed)), Priority.HigherThanNormal - 1));
