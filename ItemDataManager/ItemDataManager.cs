@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
+using System.Runtime.Serialization;
 using BepInEx;
 using BepInEx.Bootstrap;
 using HarmonyLib;
@@ -20,11 +21,13 @@ public abstract class ItemData
 
 	protected virtual bool AllowStackingIdenticalValues { get; set; } = false;
 
-	public string Value
+	private string Value
 	{
 		get => Item.m_customData.TryGetValue(CustomDataKey, out string data) ? data : "";
 		set => Item.m_customData[CustomDataKey] = value;
 	}
+	
+	public void Flush() => Value = "";
 
 	private string key = null!;
 
@@ -43,14 +46,65 @@ public abstract class ItemData
 
 	public ItemDrop.ItemData Item => Info.ItemData;
 	internal static WeakReference<ItemInfo> constructingInfo = null!;
+	internal static Dictionary<Type, FieldInfo[]> serializedContainers = new();
 	internal WeakReference<ItemInfo>? info;
 	public ItemInfo Info => (info ?? constructingInfo).TryGetTarget(out ItemInfo itemInfo) ? itemInfo : new ItemInfo(new ItemDrop.ItemData());
 
 	public virtual void FirstLoad() { }
-	public virtual void Load() { }
-	public virtual void Save() { }
 	public virtual void Unload() { }
 	public virtual void Upgraded() { }
+	
+	public void Save()
+	{
+		Type t = GetType();
+		string toSave = "";
+		if (!serializedContainers.ContainsKey(t))
+		{
+			serializedContainers[t] = t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).
+				Where(f => f.GetCustomAttributes(typeof(SerializeField), true).Length > 0).ToArray();
+		}
+		
+		foreach (FieldInfo field in serializedContainers[t])
+		{
+			object value = field.GetValue(this);
+			ZPackage pkg = new();
+			ZRpc.Serialize(new[]{value}, ref pkg);
+			toSave += $"{field.Name}:{pkg.GetBase64()}|";
+		}
+		
+		if (toSave != "") 
+			toSave = toSave.Substring(0, toSave.Length - 1);
+		
+		Value = toSave;
+	}
+
+	private static readonly FieldInfo cachedClassImpl = AccessTools.DeclaredField(typeof(ParameterInfo), "ClassImpl");
+	
+	internal void Load()
+	{
+		if(string.IsNullOrWhiteSpace(Value)) return;
+		Type t = GetType();
+		if (!serializedContainers.ContainsKey(t))
+		{
+			serializedContainers[t] = t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).
+				Where(f => f.GetCustomAttributes(typeof(SerializeField), true).Length > 0).ToArray();
+		}
+		
+		string[] parts = Value.Split('|');
+		foreach (string part in parts)
+		{
+			string[] keyVal = part.Split(':');
+			if (keyVal.Length != 2 || string.IsNullOrEmpty(keyVal[0]) || string.IsNullOrEmpty(keyVal[1])) continue;
+			FieldInfo field = serializedContainers[t].FirstOrDefault(f => f.Name == keyVal[0]);
+			if (field is null) continue;
+			ZPackage pkg = new(keyVal[1]);
+			ParameterInfo param = (ParameterInfo)FormatterServices.GetUninitializedObject(typeof(ParameterInfo));
+			cachedClassImpl.SetValue(param, field.FieldType);
+			List<object> obj = new();
+			ZRpc.Deserialize(new[]{null, param}, pkg, ref obj);
+			field.SetValue(this, obj[0]);
+		}
+	}
 
 	// data arg is ItemData this ItemData is stacked with (identical Key) - if the other item has no such ItemData, null is passed
 	// If null, stacking disallowed.
@@ -59,7 +113,10 @@ public abstract class ItemData
 	public virtual string? TryStack(ItemData? data) => AllowStackingIdenticalValues && data?.Value == Value ? Value : null;
 }
 
-public sealed class StringItemData : ItemData;
+public sealed class StringItemData : ItemData
+{
+	[SerializeField] public string Value;
+}
 
 [PublicAPI]
 public class ItemInfo : IEnumerable<ItemData>
@@ -135,7 +192,12 @@ public class ItemInfo : IEnumerable<ItemData>
 	public string? this[string key]
 	{
 		get => Get<StringItemData>(key)?.Value;
-		set => GetOrCreate<StringItemData>(key).Value = value ?? "";
+		set
+		{
+			StringItemData sid = GetOrCreate<StringItemData>(key);
+			sid.Value = value ?? "";
+			sid.Save();
+		}
 	}
 
 	internal ItemInfo(ItemDrop.ItemData itemData)
@@ -173,7 +235,7 @@ public class ItemInfo : IEnumerable<ItemData>
 		ItemDataManager.ItemData.constructingInfo = selfReference ??= new WeakReference<ItemInfo>(this); 
 		T obj = new() { info = selfReference, Key = key };
 		data[compoundKey] = obj;
-		obj.Value = ""; // initial Store
+		obj.Flush(); // initial Store
 		obj.FirstLoad();
 		return obj;
 	}
