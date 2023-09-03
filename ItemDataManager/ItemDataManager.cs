@@ -53,6 +53,7 @@ public abstract class ItemData
 	public virtual void FirstLoad() { }
 	public virtual void Unload() { }
 	public virtual void Upgraded() { }
+	public virtual void OnLoad() { }
 	
 	public void Save()
 	{
@@ -313,7 +314,8 @@ public class ItemInfo : IEnumerable<ItemData>
 		obj.info = selfReference;
 		obj.Key = keyParts.Length > 1 ? keyParts[1] : "";
 		obj.Load();
-
+		obj.OnLoad();
+		
 		return obj;
 	}
 
