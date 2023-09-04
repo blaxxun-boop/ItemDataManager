@@ -5,6 +5,8 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
+using System.Runtime.Serialization;
+using System.Text;
 using BepInEx;
 using BepInEx.Bootstrap;
 using HarmonyLib;
@@ -20,6 +22,7 @@ public abstract class ItemData
 
 	protected virtual bool AllowStackingIdenticalValues { get; set; } = false;
 
+	// Value is the raw data stored on the Item. An ItemData implementing class may either use it directly, or attach a [SerializeField] attribute to at least one field, in which case Value will be maintained by the default Load() and Save() implementations.
 	public string Value
 	{
 		get => Item.m_customData.TryGetValue(CustomDataKey, out string data) ? data : "";
@@ -47,8 +50,58 @@ public abstract class ItemData
 	public ItemInfo Info => (info ?? constructingInfo).TryGetTarget(out ItemInfo itemInfo) ? itemInfo : new ItemInfo(new ItemDrop.ItemData());
 
 	public virtual void FirstLoad() { }
-	public virtual void Load() { }
-	public virtual void Save() { }
+
+	public virtual void Load()
+	{
+		if (fetchSerializedFields() is not { Count: > 0 } fields || Value == "")
+		{
+			return;
+		}
+
+		List<object> obj = new();
+		foreach (string part in Value.Split('|'))
+		{
+			string[] keyVal = part.Split(':');
+			if (keyVal.Length != 2 || !fields.TryGetValue(keyVal[0], out FieldInfo field))
+			{
+				continue;
+			}
+
+			ZPackage pkg = new(keyVal[1]);
+			ParameterInfo param = (ParameterInfo)FormatterServices.GetUninitializedObject(typeof(ParameterInfo));
+			parameterInfoClassImpl.SetValue(param, field.FieldType);
+			obj.Clear();
+			ZRpc.Deserialize(new[] { null, param }, pkg, ref obj);
+			if (obj.Count > 0)
+			{
+				field.SetValue(this, obj[0]);
+			}
+		}
+	}
+
+	public virtual void Save()
+	{
+		if (fetchSerializedFields() is not { Count: > 0 } fields)
+		{
+			return;
+		}
+
+		StringBuilder toSave = new();
+
+		foreach (FieldInfo field in fields.Values)
+		{
+			ZPackage pkg = new();
+			ZRpc.Serialize(new[] { field.GetValue(this) }, ref pkg);
+			toSave.Append(field.Name);
+			toSave.Append(':');
+			toSave.Append(pkg.GetBase64());
+			toSave.Append('|');
+		}
+
+		--toSave.Length;
+		Value = toSave.ToString();
+	}
+
 	public virtual void Unload() { }
 	public virtual void Upgraded() { }
 
@@ -57,6 +110,20 @@ public abstract class ItemData
 	// If non-null, the new item will have ItemData with this new string-value
 	// By default stacking is disallowed. Set AllowStackingIdenticalValues property to true for trivial by Value comparisons.
 	public virtual string? TryStack(ItemData? data) => AllowStackingIdenticalValues && data?.Value == Value ? Value : null;
+
+	private static readonly FieldInfo parameterInfoClassImpl = AccessTools.DeclaredField(typeof(ParameterInfo), "ClassImpl");
+	private static Dictionary<Type, Dictionary<string, FieldInfo>> serializedFields = new();
+
+	private Dictionary<string, FieldInfo> fetchSerializedFields()
+	{
+		Type t = GetType();
+		if (serializedFields.TryGetValue(t, out Dictionary<string, FieldInfo> fields))
+		{
+			return fields;
+		}
+
+		return serializedFields[t] = t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).Where(f => f.GetCustomAttributes(typeof(SerializeField), true).Length > 0).ToDictionary(f => f.Name, f => f);
+	}
 }
 
 public sealed class StringItemData : ItemData;
@@ -93,7 +160,7 @@ public class ItemInfo : IEnumerable<ItemData>
 	private WeakReference<ItemInfo>? selfReference = null;
 
 	internal HashSet<string> isCloned = new();
-	private static ItemDrop.ItemData? awakeningItem = null; 
+	private static ItemDrop.ItemData? awakeningItem = null;
 
 	internal static void addTypeToInheritorsCache(Type type, string typeKey)
 	{
@@ -170,7 +237,7 @@ public class ItemInfo : IEnumerable<ItemData>
 		}
 
 		ItemData.m_customData[fullKey] = "";
-		ItemDataManager.ItemData.constructingInfo = selfReference ??= new WeakReference<ItemInfo>(this); 
+		ItemDataManager.ItemData.constructingInfo = selfReference ??= new WeakReference<ItemInfo>(this);
 		T obj = new() { info = selfReference, Key = key };
 		data[compoundKey] = obj;
 		obj.Value = ""; // initial Store
@@ -245,7 +312,7 @@ public class ItemInfo : IEnumerable<ItemData>
 			return null;
 		}
 
-		ItemDataManager.ItemData.constructingInfo = selfReference ??= new WeakReference<ItemInfo>(this); 
+		ItemDataManager.ItemData.constructingInfo = selfReference ??= new WeakReference<ItemInfo>(this);
 		ItemData obj = (ItemData)Activator.CreateInstance(type);
 		data[key] = obj;
 		obj.info = selfReference;
@@ -269,7 +336,7 @@ public class ItemInfo : IEnumerable<ItemData>
 		{
 			return;
 		}
-		
+
 		string prefix = dataKey("");
 		List<string> keys = ItemData.m_customData.Keys.ToList();
 		foreach (string key in keys)
